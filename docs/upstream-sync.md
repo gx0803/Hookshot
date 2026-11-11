@@ -189,12 +189,16 @@ export RX_VK_ONLY=1
 若上游原作者仍不纳入多语言（issue #2303 无回应），每合并一个官方版本 X.Y.Z，就在本 fork 发一个同号 `X.Y.Z-CN`：
 
 - **tag**：annotated tag，指向该版中文 i18n 源码所在的 commit（`feat/menu-i18n` 对应提交）。例如 `v2.1.0-CN` → `9e8c389`（上游 `v2.1.0` `8ef8461` + `feat(menu)`）。
-- **Release**：非 draft、非 prerelease、标为 **Latest**；正文给「下载哪个 / 中文菜单用法 / 注意事项」。
-- **资产对齐官方同名 9 项**：官方那 7 个文件照搬原样（`HookshotBuilder.exe`、`Hookshot-v2.1.0-Windows-x64.zip`、`hookshot-setup.txt`、`hookshot-linux.txt`、`SHA256SUMS` 及 GitHub 自动生成的 `Source code` zip/tar.gz），差异项 =
-  - **把游戏 exe 换成中文载体**：官方 release 本就不含 470 MB 游戏 exe（Builder 在玩家本机从游戏文件构建），能分发的中文载体只有 ① 源码 tag（含 draw-time i18n）② 中文 `hookshot_vk.dll` 补丁包。故以 `Hookshot-X.Y.Z-CN-DLL-Patch.zip`（DLL + `INSTALL.txt`）作为「追加中文支持的可执行文件」，并附 `README-X.Y.Z-CN.md`。
+- **Release**：非 draft、非 prerelease、标为 **Latest**；正文给「下载哪个 / 中文菜单用法 / 加速更新 / 注意事项」。
+- **资产 = 官方 7 项照搬 + CN 3 项 = 网页共 10 项**（GitHub 自动的 `Source code` zip/tar.gz 2 项 + 上传 8 项）：
+  - 官方 7 项照搬原样：`HookshotBuilder.exe`、`Hookshot-vX.Y.Z-Windows-x64.zip`、`hookshot-setup.txt`、`hookshot-linux.txt`、`SHA256SUMS`，及 GitHub 自动生成的 `Source code` zip/tar.gz。
+  - CN 差异 3 项：
+    1. **中文 DLL 补丁** `Hookshot-X.Y.Z-CN-DLL-Patch.zip`（`hookshot_vk.dll` + `INSTALL.txt`）。官方 release 本就不含 470 MB 游戏 exe（Builder 在玩家本机从游戏文件构建），能分发的中文载体只有①源码 tag（draw-time i18n）②这个 DLL 补丁；它是「追加中文支持的可执行文件」。
+    2. **预更新面板** `Hookshot-CN-PrepUpdate.zip`（本地下载加速工具，见下节；Windows-only）。
+    3. `README-X.Y.Z-CN.md`（完整中文说明，随资产上传）。
   - **不镜像 231 MB 的 Linux AppImage**：它不含中文、且是 Linux 构建器，硬塞进 CN Release 只会误导；在正文给官方直达链接。
-- **SHA256SUMS** 重算，覆盖本 Release 实际上传的资产（不含自身、不含 GitHub 自动源码归档）。
-- 发布脚本与产物在 `D:\games\NS2\Hookshot\v2.1-review\release-assets\`（`make-patch.py` / `make-release-meta.py` / `gh-release.py`），token 从 Git 凭据运行时读取、不落盘。
+- **SHA256SUMS** 重算，覆盖本 Release **实际上传的 8 项**（不含自身、不含 GitHub 自动源码归档）。新增/替换资产后必须重跑 `make-release-meta.py`。
+- 发布脚本与产物在 `D:\games\NS2\Hookshot\v2.1-review\release-assets\`（`make-patch.py` / `make-prepupdate-zip.py` / `make-release-meta.py` / `gh-release.py`），token 从 Git 凭据运行时读取、不落盘。GitHub 不允许覆盖同名资产：更新 `SHA256SUMS` 要先 DELETE 旧资产再上传新的（`gh-release.py` 的 `upload` 只跳过同名重复，不覆盖）。
 
 ## Update 下载加速：为什么不改官方链路，继续用网页工具
 
@@ -206,4 +210,17 @@ export RX_VK_ONLY=1
 2. 官方每次改这块代码，本 fork 的 rebase 就得重打补丁，维护成本远超收益；
 3. 更致命：得先有一个长期稳定、真能加速的第三方 GitHub 镜像域名——不可控的外部依赖，不能替用户拍板。
 
-**既定方案**：继续用 `D:\games\NS2\Hookshot\prep-update\`（`start.bat` → `127.0.0.1:8806`）。它读官方清单算出差集，把 `<sha256>.zip` 预下载进官方 `downloads` 目录；`setup.c` 发现文件已存在且 SHA-256 匹配就整段跳过下载（`setup.c:637`），于是 Update 按钮秒过。零改源码、零 rebase 冲突，且 `app`/`dotnet` 等无独立目录的 part 每次仍需重下这点也已写明。若用户日后指定了一个稳定加速域名，再按本节评估是否做代码级改源。
+**既定方案**：继续用预更新面板。它读官方清单算出差集，把 `<sha256>.zip` 预下载进官方 `downloads` 目录；`setup.c` 发现文件已存在且 SHA-256 匹配就整段跳过下载（`setup.c:637`），于是 Update 按钮秒过。零改源码、零 rebase 冲突，且 `app`/`dotnet` 等无独立目录的 part 每次仍需重下这点也已写明。若用户日后指定了一个稳定加速域名，再按本节评估是否做代码级改源。
+
+**工具已通用化并开源（2026-11-11）**，现在有两个来源，逻辑同源：
+
+| 来源 | 路径 | 面向 |
+|---|---|---|
+| 维护者本机版 | `D:\games\NS2\Hookshot\prep-update\`（旧路径，写死本机，仍可用） | 高工本地 |
+| **对外发布版** | fork `main` 分支 `tools/prep-update/`，随每个 `X.Y.Z-CN` Release 打包为 `Hookshot-CN-PrepUpdate.zip` | 所有 CN 版用户 |
+
+对外版消除了所有硬编码路径（数据根按 `HOOKSHOT_BUILDER_DIR` 环境变量 > `config.json` > 自动探测 `%LOCALAPPDATA%\HookshotBuilder` 定位；`GAME` 探测不到只影响版本显示、不影响差集），`start.bat` 用 `%~dp0` 相对定位，`curl` 的 `--ssl-no-revoke` 只在 Windows 加。**仅支持 Windows**：官方 `hookshot-linux.txt` 是 `part <sha> <size> <dest> <url>` + `tree`/`file` 指令（无 `frm/to` 字段），格式不同，`parse_setup()` 检测到会硬报错，绝不静默算出 0 个 part。
+
+- 源码改动只落 `main` 分支，**不进 `feat/menu-i18n`**（PR 源保持纯净），也不影响上游 rebase。
+- 打包脚本 `make-prepupdate-zip.py` 用白名单，排除 `prep-update.log` / `last-check.json` / `config.json` / `__pycache__` 等运行时与个人产物。
+- 面板核心（差集/复用/下载/校验）与本机版逐项一致：本机 `--selftest` 实测官方清单 8 part、升级前差集 4 需下载 / 4 复用 / 147.8 MB；内存注入第 9 个新 part 自动归入 `need`、`need+1`，证明上游新增组件会被准确识别。
