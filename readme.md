@@ -262,8 +262,8 @@ use and cause stalls when the card runs out of headroom. To undo it, remove that
 
 This fork ( [`gx0803/Hookshot`](https://github.com/gx0803/Hookshot) ) adds an **optional Simplified Chinese menu** on
 top of upstream. Upstream [does not include a menu-language switch yet](https://github.com/NotRexed/Hookshot/issues/2303),
-so this is a fork-only feature; every upstream change is rebased on top of it by the
-[upstream-sync SOP](docs/upstream-sync.md).
+so this is a fork-only feature; the fork re-applies its translation on top of every upstream release, which is published as
+a matching `X.Y.Z-CN` tag and release.
 
 - **Switch at any time:** in game press <kbd>F1</kbd>, open the last **Language / 语言** tab, choose `English` or
   `简体中文`. The choice is stored as `language=0` / `language=1` in `hookshot_options.ini` and applies at once.
