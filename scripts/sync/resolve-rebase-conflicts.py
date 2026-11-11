@@ -63,18 +63,23 @@ def main() -> int:
         return 0
 
     reg = json.loads(REGISTRY.read_text(encoding="utf-8"))
+    # Side order is operation-dependent: in a rebase, "ours"(HEAD) is the
+    # upstream we rebase onto and "theirs" is the applied commit, i.e. the
+    # reverse of a merge. Match on the ORDER-INDEPENDENT pair of sides.
+    def key(a, b):
+        return tuple(sorted((a.strip(), b.strip())))
+
     by_pair = {}
     for c in reg["conflicts"]:
-        key = (c["ours"].strip(), c["theirs"].strip())
-        if key in by_pair:
-            print("!! duplicate (ours,theirs) pair in registry: ids '%s' and '%s'" % (by_pair[key]["id"], c["id"]), file=sys.stderr)
+        k = key(c["ours"], c["theirs"])
+        if k in by_pair:
+            print("!! duplicate side-pair in registry: ids '%s' and '%s'" % (by_pair[k]["id"], c["id"]), file=sys.stderr)
             return 1
-        by_pair[key] = c
+        by_pair[k] = c
 
     errors = []
     for i, (ours, theirs) in enumerate(conflicts, 1):
-        key = (ours.strip(), theirs.strip())
-        hit = by_pair.get(key)
+        hit = by_pair.get(key(ours, theirs))
         if hit is None:
             errors.append("conflict %d is NOT registered (or text changed). Run with --dump and add it to %s." % (i, REGISTRY.name))
             errors.append(dump([(ours, theirs)]))
