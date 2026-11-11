@@ -280,8 +280,11 @@ so this is a fork-only feature; every upstream change is rebased on top of it by
 
 Because upstream's in-game **Update** button always points at `NotRexed/Hookshot`, it will not install this fork's Chinese
 build. After an upstream release, this fork publishes a matching `X.Y.Z-CN` tag and release; re-apply the Chinese DLL patch
-from that release after updating. To avoid re-downloading the ~500 MB of builder components that GitHub serves slowly, use
-the local `prep-update` panel, which pre-downloads them so the official setup skips straight through.
+from that release after updating. If GitHub is slow for the ~500 MB of builder components, each `X.Y.Z-CN` release also ships
+`Hookshot-CN-PrepUpdate.zip` — a **local prep-download panel** (Windows) that fetches and verifies those components into the
+Builder's `downloads` folder in advance, so the official setup skips straight through. Source is in
+[`tools/prep-update`](tools/prep-update/README.md); unzip the asset and run `start.bat`. It never launches the Builder, clicks
+Update, or touches game files.
 
 ## In-game menu
 

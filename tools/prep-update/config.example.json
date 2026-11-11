@@ -1,0 +1,5 @@
+{
+  "_note": "复制本文件为 config.json 并按需填写。两项均可留空表示走自动探测。config.json 含本机路径，请勿提交或分享。",
+  "builder_dir": "",
+  "game_dir": ""
+}

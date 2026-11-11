@@ -1,0 +1,12 @@
+# 运行时产物：绝不入库（日志、差集快照、含本机路径的个人配置、分段缓存）
+prep-update.log
+last-check.json
+config.json
+predl/
+*.seg
+*.whole
+*.zip
+
+# Python 缓存
+__pycache__/
+*.pyc

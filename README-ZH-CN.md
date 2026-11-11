@@ -19,6 +19,7 @@
 | `Hookshot-v2.1.0-CN-DLL-Patch.zip` | **已装好官方 v2.1.0 的玩家**：覆盖一个 DLL 即获得中文菜单（最简单，推荐的绝大多数人用这个）|
 | `Source code (zip)` / `Source code (tar.gz)` | 想从源码自行构建中文版的开发者（tag = `v2.1.0-CN`，代码在 `feat/menu-i18n`）|
 | `Hookshot-v2.1.0-Windows-x64.zip` + `HookshotBuilder.exe` | **全新安装**：官方原样启动器 / 构建器，从你自己的游戏文件构建；构建完成后再打上面的中文 DLL 补丁 |
+| `Hookshot-CN-PrepUpdate.zip` | **加速更新（Windows）**：本地预下载面板，详见下文「加速更新」|
 | `hookshot-setup.txt` / `hookshot-linux.txt` / `SHA256SUMS` | 官方原样清单与校验和，用于全新安装时按需下载组件 |
 
 **Linux 用户**：本 CN 版目前只提供 Windows 的 `hookshot_vk.dll` 补丁。官方 Linux AppImage（不含中文补丁）请从[上游 release](https://github.com/NotRexed/Hookshot/releases/latest) 下载；如需中文菜单，可按源码自行构建。
@@ -32,6 +33,17 @@
 5. 中文菜单字体读取游戏自带 `.bfttf`，无需改 romfs。
 
 详见补丁包内的 `INSTALL.txt`。
+
+## 加速更新（可选，Windows）
+
+游戏内 **Update** 按钮会去上游重新下载约 500 MB 构建组件，GitHub 直连常常很慢。本 Release 附带 `Hookshot-CN-PrepUpdate.zip`——一个**本地网页面板**，先按官方规则把组件下载好并校验进 Builder 的 `downloads/`，之后点官方 Update 时 `setup.c` 会整段跳过、秒过。
+
+1. 下载并解压 `Hookshot-CN-PrepUpdate.zip` 到一个文件夹（里面有 `start.bat`）。
+2. 双击 `start.bat`，浏览器会自动打开 `http://127.0.0.1:8806/`。
+3. 点「检测版本更新」→「开始预下载」；全部就绪后，**由你自己**去点官方 Builder 的 Update 或直接启动游戏。
+4. 关掉黑窗口（或在里面按 Ctrl+C）即停。
+
+面板**只读**游戏目录，**不会**启动 Builder、替你点 Update、改 ini / env / DLL / exe；唯一写入是 Builder 的 `downloads/` 与 `predl/`。工具**仅支持 Windows**：路径自动探测 `%LOCALAPPDATA%\HookshotBuilder`，若你的 Builder 数据放在别处，用环境变量 `HOOKSHOT_BUILDER_DIR` 指向它，或在解压目录建 `config.json` 写 `{"builder_dir": "..."}`（见包内 `README.md` 与 `config.example.json`）。上游每次新增组件，面板都会重新拉官方清单并自动识别新增的 part，无需更新本工具。
 
 ## 注意事项
 
