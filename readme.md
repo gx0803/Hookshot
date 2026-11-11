@@ -12,11 +12,20 @@
 <h4 align="center">The Legend of Zelda: Ocarina of Time (Nintendo Switch 2) running natively on Windows & Linux, with no emulator.
 </h4>
 
+> [!NOTE]
+> **This fork adds an optional Simplified Chinese menu (本 fork 增加可选简体中文菜单).** Press <kbd>F1</kbd> in game,
+> open the last **Language / 语言** tab, and switch between `English` and `简体中文` at once; the choice is saved in
+> `hookshot_options.ini`. Translation happens at draw time, so the game's `romfs` is never modified and nothing else
+> changes. See [Chinese menu](#chinese-menu) and the [`v2.1.0-CN` release](https://github.com/gx0803/Hookshot/releases/tag/v2.1.0-CN)
+> for a ready-to-use `hookshot_vk.dll` patch. This fork tracks upstream [NotRexed/Hookshot](https://github.com/NotRexed/Hookshot);
+> multi-language support is requested upstream in [issue #2303](https://github.com/NotRexed/Hookshot/issues/2303).
+
 
 <p align="center">
   <a href="#project-status">Status</a> |
   <a href="#install-and-play">Install and play</a> |
   <a href="#in-game-menu">In-game menu</a> |
+  <a href="#chinese-menu">中文菜单</a> |
   <a href="#if-something-goes-wrong">Problems</a> |
   <a href="#build-from-source">Build from source</a> |
   <a href="#how-it-works">How it works</a> |
@@ -248,6 +257,31 @@ Restart the game. The same setting applies when Steam or RecompLauncher starts t
 
 This is a workaround for some artifacts, not a general lighting fix. It can substantially increase graphics-memory
 use and cause stalls when the card runs out of headroom. To undo it, remove that line and restart the game.
+
+## Chinese menu
+
+This fork ( [`gx0803/Hookshot`](https://github.com/gx0803/Hookshot) ) adds an **optional Simplified Chinese menu** on
+top of upstream. Upstream [does not include a menu-language switch yet](https://github.com/NotRexed/Hookshot/issues/2303),
+so this is a fork-only feature; every upstream change is rebased on top of it by the
+[upstream-sync SOP](docs/upstream-sync.md).
+
+- **Switch at any time:** in game press <kbd>F1</kbd>, open the last **Language / 语言** tab, choose `English` or
+  `简体中文`. The choice is stored as `language=0` / `language=1` in `hookshot_options.ini` and applies at once.
+- **What is translated:** the main menu, the Graphics / Gameplay / Controls / Debug pages, and the Inventory and
+  Teleport sub-pages — 520 entries in total. Names come from the game's own official Simplified Chinese (`CNzh`) strings,
+  not machine translation; missing ones were filled in by hand following upstream wording.
+- **How it is built:** translation happens only at the draw call (`menu_i18n::tr()`); the English source strings stay
+  untouched because they are also ini keys and comparison subjects, so settings and cheats keep working. The Chinese menu
+  font is read from the game's own bundled `.bfttf` font — the `romfs` is never modified (replacing its `.bfotf` crashes
+  the guest font loader). See [the `v2.1.0-CN` release](https://github.com/gx0803/Hookshot/releases/tag/v2.1.0-CN) for a
+  ready-to-use `hookshot_vk.dll` patch and full install notes.
+
+### Updating this fork
+
+Because upstream's in-game **Update** button always points at `NotRexed/Hookshot`, it will not install this fork's Chinese
+build. After an upstream release, this fork publishes a matching `X.Y.Z-CN` tag and release; re-apply the Chinese DLL patch
+from that release after updating. To avoid re-downloading the ~500 MB of builder components that GitHub serves slowly, use
+the local `prep-update` panel, which pre-downloads them so the official setup skips straight through.
 
 ## In-game menu
 
