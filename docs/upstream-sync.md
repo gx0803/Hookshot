@@ -4,6 +4,22 @@
 
 本文目标：上游每发一版，按固定流程把新代码同步进来、保住中文、产出可直接使用的 DLL，且**不依赖对话上下文**即可复现。
 
+## ★★★ 红线：两条 DLL 产品线，绝不混淆（每次跟进前先读）
+
+本机「中文 DLL」有**两个构建变体**，用途和分发范围完全不同，跟进上游时**两条线都要编**、缺一不可。混淆的后果是：要么本机 DLSS 配置丢失（退回 stub），要么把受 NVIDIA 许可约束的文件发布出去（违规）。
+
+| 产品线 | 构建开关 | 产出能力 | 去向 | 分发 |
+|---|---|---|---|---|
+| **A. 公开 stub 版** | 不带 `HOOKSHOT_NGX_SDK` | 中文菜单 + 全部非 NGX 设置；**无 DLSS model / Upscaler 的 DLSS 项** | 打进 `Hookshot-X.Y.Z-CN-DLL-Patch.zip` 发 Release | ✅ 可公开分发 |
+| **B. 本机 NGX 版** | 带 `HOOKSHOT_NGX_SDK=<本机路径>` | 在 A 基础上**多编入 NGX**（`dlss_why()==DLSS_OK`）→ Graphics 页出现 `Upscaler=NVIDIA DLSS` / `DLSS model` / `渲染分辨率` / `窗口缩放滤镜` | 只装回本机游戏目录 `bin\hookshot_vk.dll`，配 `ngx\nvngx_dlss.dll` runtime | ❌ **绝不提交 git / 上传 / 分享 / 发帖** |
+
+**为什么必须显式记这条**：上游官方 DLL 是 stub（`dlss_built()` 只在 `#ifdef HOOKSHOT_NGX` 为真），第 ⑤ 步那条**不带** `HOOKSHOT_NGX_SDK` 的重编命令编出来是 **A 版**——若直接把 A 装回本机，DLSS 相关菜单会全部消失（这是 2026-11-11 已真实踩过、并为用户重编 NGX 才找回的坑）。所以：
+
+1. **本机自用 = 必须用 B 版**：每次跟进重编后，除 A 版（发 Release）外，**还要带 `HOOKSHOT_NGX_SDK` 再编一次 B 版装回游戏目录**，保住高工在用的 DLSS 配置（`dlss=1` / `dlss_model=0`、`resolution`、`sharpness=80`、`Upscaler` 等），别让本机退回 stub。
+2. **公开 Release = 只能用 A 版**：`release-assets\make-patch.py` 的输入必须是 stub DLL；发版前核对补丁包里 DLL 的 SHA **不等于**本机 NGX DLL 的 SHA。
+3. **B 版相关文件一个都不进 git**：NGX SDK、runtime `nvngx_dlss.dll`、`private-ngx\`、以及任何含 NGX 的 DLL / `.part` / `.swap-*` 产物，均被仓库根 `.gitignore` 拦下（见该文件「本机自用 NGX/DLSS」段）；**tracked 的 `scripts/ngx_sdk.py` / `gpu/vk/vk_ngx_msvc_rt.cpp` / 两个 NGX 测试是上游源码，必须保留**，它们只是构建工具，不含 NVIDIA 二进制。
+4. **NVIDIA 许可**：B 版 DLL 与 `ngx\nvngx_dlss.dll` 仅本机自用，绝不上传/分享（含往本 fork 的 commit/push、Release 资产、issue 附件、PR）。
+
 ## 分支结构（谁负责什么）
 
 | 分支 | 用途 | 是否提 PR |
@@ -28,10 +44,15 @@
 ③  audit-menu-drift.py：列出上游新增、中文表缺失的菜单串
 ④  补译：从游戏官方 zh-Hans 资源取译名，写入 menu_zh.json（唯一人工步骤）
 ⑤  gen_menu_i18n.py 重生成表头 + RX_VK_ONLY=1 重编译 vk 层（约 46 秒）
-⑥  switch-fork-i18n.py 把新 DLL 装回游戏目录 + 校验
+      ├─ 编 A 版（不带 HOOKSHOT_NGX_SDK）→ 供 -CN Release 的 DLL 补丁包（可公开）
+      └─ 编 B 版（带 HOOKSHOT_NGX_SDK）  → 保住本机 DLSS 配置，装回自用（绝不公开）
+⑥  switch-fork-i18n.py 把 B 版（NGX 中文）DLL 装回游戏目录 + 校验；
+   A 版（stub）交给 release-assets 打补丁包
 ```
 
 除第 ④ 步外全部可自动化/脚本化。第 ④ 步是唯一需要人的地方，且只在**上游改了菜单文案**时才会产生新串——多数升级这一步是空的。
+
+> **第 ⑤ 步是两条产品线，不是一条**：只编 A 版会把本机 DLSS 弄丢，只编 B 版会把受许可约束的 NGX 二进制带进公开包。两个开关各编一次、各归其位，详见开头「★★★ 红线」。
 
 ## 绝对路径与工具链（本机）
 
@@ -44,6 +65,10 @@
 | 游戏目录 | `D:\games\NS2\Hookshot\games\The Legend of Zelda Ocarina of Time\` |
 | 官方简中译名来源 | `D:\games\NS2\Hookshot\menu-cn\translations.json`（romfs `CNzh` MSBT 提取，440 条） |
 | 游戏 DLL 安装/体检工具 | `D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py` |
+| **本机 NGX SDK（编 B 版用，禁提交）** | `D:\games\NS2\Hookshot\private-ngx\ngx-sdk\`（取 `scripts/ngx_sdk.py --accept-nvidia-license` 产出） |
+| **NGX runtime（只装本机，禁提交）** | 游戏目录 `ngx\nvngx_dlss.dll` |
+| **本机自用 NGX DLL 基线（B 版，禁公开）** | 游戏目录 `bin\hookshot_vk.dll`，2026-11-12 SHA `15630585…`（NGX + 520 条中文） |
+| **公开 stub DLL 基线（A 版，可公开）** | `v2.1-review\release-assets\Hookshot-v2.1.0-CN-DLL-Patch.zip` 内 SHA `ca59d57d…` |
 
 ## 逐步命令
 
@@ -112,7 +137,7 @@ git add gpu/vk/vk_menu.cpp && git rebase --continue
 %PY% -I -B tests/test_menu_i18n.py                    # 6 项全绿
 ```
 
-只重编 vk 层（约 46 秒，不碰 470 MB 的 `hookshot.exe`）：
+只重编 vk 层（约 46 秒，不碰 470 MB 的 `hookshot.exe`）。**公共环境变量先 export 一次**：
 
 ```bash
 export EMSDK="D:/games/NS2/HookshotBuilder-data/versions/v2.1.0/HookshotBuilder/tools/emsdk"
@@ -120,20 +145,51 @@ export HOOKSHOT_MINGW="D:/games/NS2/HookshotBuilder-data/versions/v2.1.0/Hooksho
 export RX_CPM="D:/games/NS2/HookshotBuilder-data/versions/v2.1.0/HookshotBuilder/tools/cpm"
 export OOT_WORK="D:/games/NS2/Hookshot/build-fork-i18n3"
 export RX_VK_ONLY=1
-%PY% -I nx2/build.py --standalone --jobs 10
-# 产物：build-fork-i18n3/sa/build/hookshot_vk.dll
 ```
 
 > 三个 `export` 缺一不可：缺 `RX_CPM` 找不到 Vulkan/SPIR-V/VMA 头会直接退出；缺 `EMSDK`/`HOOKSHOT_MINGW` 用错编译器报头文件找不到。`RX_VK_ONLY=1` 把 jobs 换成 vk_jobs，跳过 guest 代码（否则全量要几小时）。`--standalone` 会顺带重链 exe，但**只取 DLL，绝不覆盖 `bin\hookshot.exe`**。
 
+**★ 分两条产品线各编一次（缺一不可，详见开头红线）**：
+
+```bash
+# ---- A 版：公开 stub（发 -CN Release 的 DLL 补丁包，可分发）----
+unset HOOKSHOT_NGX_SDK
+%PY% -I nx2/build.py --standalone --jobs 10
+cp build-fork-i18n3/sa/build/hookshot_vk.dll <stub 暂存，交 release-assets/make-patch.py>
+# 产物不含 NGX：dlss_built()==false，Graphics 页无 DLSS model / Upscaler 的 DLSS 项
+
+# ---- B 版：本机 NGX（保住 DLSS 配置，装回自用，绝不公开）----
+export HOOKSHOT_NGX_SDK="D:/games/NS2/Hookshot/private-ngx/ngx-sdk"
+%PY% -I nx2/build.py --standalone --jobs 10
+cp build-fork-i18n3/sa/build/hookshot_vk.dll <本机暂存，交第 ⑥ 步 switch-fork-i18n.py>
+# 产物含 NGX：dlss_built()==true，Graphics 页有 Upscaler=NVIDIA DLSS / DLSS model / 渲染分辨率 / 窗口缩放滤镜
+unset HOOKSHOT_NGX_SDK   # 编完立刻清掉，避免后续误把 NGX 编进公开包
+```
+
+**首次编 B 版前**若本机无 SDK，先取一次（会下载 58 MB runtime，需接受 NVIDIA 许可；清掉本机残代理）：
+
+```bash
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  %PY% -I scripts/ngx_sdk.py --platform windows --accept-nvidia-license \
+      --game "D:\games\NS2\Hookshot\games\The Legend of Zelda Ocarina of Time" \
+      "D:/games/NS2/Hookshot/private-ngx/ngx-sdk"
+# runtime 下载中断（.part）用 curl -C - 续传后重跑本脚本校验，勿手工改 SDK 内容
+```
+
+> **发版前必做校验**：`make-patch.py` 打进补丁包的 stub DLL 的 SHA，必须 **≠** 第 ⑥ 步装回本机的 NGX DLL SHA；若两者相同，说明误把 NGX 编进了公开包，**立即停发**。当前基线：stub `ca59d57d…`（可公开）/ NGX `15630585…`（仅本机）。
+
 ### ⑥ 装回并校验（碰游戏目录，改前先确认游戏已关）
+
+**装的是 B 版（NGX 中文 DLL）**，不是 A 版 stub——否则本机 DLSS 菜单消失：
 
 ```bash
 %PY% D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py --check
-%PY% D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py --apply --lang 1 --fork-dll "D:\games\NS2\Hookshot\build-fork-i18n3\sa\build\hookshot_vk.dll"
+%PY% D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py --apply --lang 1 --fork-dll "<第 ⑤ 步 B 版暂存的 hookshot_vk.dll>"
 ```
 
-工具会：核对游戏进程未运行 → 备份当前 DLL/ini/env → 装新 fork DLL → 写**等价英文键 ini**（fork 的 `ini_key()` 只认英文行名）→ 逐 SHA 校验。当前本地常驻态：`hookshot_vk.dll` = `d2c7f248…`（stage2）、96 个纯英文键 ini、`language=1`（中文启动）、env 三项原样（`HOS_ASPECT=2.3889` / `HOS_OOT_CHEATS=1` / `HOS_INPUT_LIVE=cheat-live.txt`）。
+工具会：核对游戏进程未运行 → 备份当前 DLL/ini/env → 装新 fork DLL → 写**等价英文键 ini**（fork 的 `ini_key()` 只认英文行名）→ 逐 SHA 校验。装回后**真机进游戏 F1 → Graphics 页确认** `Upscaler=NVIDIA DLSS` / `DLSS model` / `渲染分辨率` / `窗口缩放滤镜` 四项都在（这是 B 版编成功的判据）；缺任一项说明这次误装了 A 版 stub，回到第 ⑤ 步重编 B 版。
+
+当前本地常驻态（2026-11-12）：`bin\hookshot_vk.dll` = `15630585…`（**B 版 NGX** + 520 条中文）、`ngx\nvngx_dlss.dll` = `d00b5b0a…`、96 个纯英文键 ini、`language=1`（中文启动）、env 三项原样（`HOS_ASPECT=2.3889` / `HOS_OOT_CHEATS=1` / `HOS_INPUT_LIVE=cheat-live.txt`）、生效配置含 `dlss=1`/`dlss_model=0`/`sharpness=80`/`controller_in_background=1`。**这套与公开 stub `d2c7f248…`/`ca59d57d…` 分轨，别互相覆盖。**
 
 ## 关键不变量（改代码时别破坏）
 
@@ -147,9 +203,9 @@ export RX_VK_ONLY=1
 官方 `HookshotBuilder.exe` 的 Update 会**成套覆盖 `hookshot.exe` + `hookshot_vk.dll`**，fork 的 Language tab 与源码中文会丢。恢复流程：
 
 1. 确认新版本对应的上游 tag/commit，把 `chore/upstream-sync` rebase 到它（走上面六步）。
-2. 用新版本工具链重编 vk 层（工具链路径里的 `v2.1.0` 换成新版本目录）。
-3. `switch-fork-i18n.py --fork-dll <新DLL>` 重铺，体检 SHA / 字体回退串 / 新译文串。
-4. 真机进游戏确认。
+2. 用新版本工具链重编 vk 层（工具链路径里的 `v2.1.0` 换成新版本目录），**仍按红线编两条**：A 版 stub（发版用）+ B 版 NGX（带 `HOOKSHOT_NGX_SDK`，装回本机保住 DLSS）。Builder Update 覆盖 DLL 后本机 DLSS 也会一起丢，只补 stub 不够。
+3. `switch-fork-i18n.py --fork-dll <B 版 NGX DLL>` 重铺，体检 SHA / 字体回退串 / 新译文串。
+4. 真机进游戏 F1 → Graphics 页确认 `Upscaler`/`DLSS model`/`渲染分辨率`/`窗口缩放滤镜` 四项都在。
 
 > 这一步「把中文 DLL 换回去」是当前路线**唯一无法消除的机械动作**，因为 Builder 是官方 closed box、构建用的是官方源码，不会用本 fork。它已从旧方案的「重算偏移打补丁」降级为「换一个已编好的文件」，可脚本化、可代劳。
 
@@ -178,11 +234,15 @@ export RX_VK_ONLY=1
 1. `git fetch upstream`，确认上游新 tag/commit。
 2. 在 `chore/upstream-sync` 跑 `scripts/sync/sync-upstream.py --apply`（rebase + 已知冲突自动解 + 门禁）。
 3. 跑 `scripts/sync/audit-menu-drift.py`，把新出现的待译串从**官方 zh-Hans 资源**补进 `gpu/vk/menu_zh.json`（不机翻、不猜）。
-4. `scripts/gen_menu_i18n.py` 重生成 `menu_i18n.h`；`RX_VK_ONLY=1` 重编 vk 层得到中文 `hookshot_vk.dll`。
-5. **先请用户关闭游戏**，再用 `switch-fork-i18n.py --apply --lang 1 --fork-dll <新DLL>` 装回并体检。
-6. 打 `X.Y.Z-CN` tag + 发布 Release（见下节），把该版中文 DLL 补丁包换上去。
+4. `scripts/gen_menu_i18n.py` 重生成 `menu_i18n.h`；`RX_VK_ONLY=1` **按开头红线编两条产品线**：
+   - **A 版（stub，不带 `HOOKSHOT_NGX_SDK`）** → 交第 6 步打公开 DLL 补丁包；
+   - **B 版（NGX，带 `HOOKSHOT_NGX_SDK`）** → 交第 5 步装回本机，**保住 DLSS 相关配置**（`dlss=1`/`dlss_model=0`/`Upscaler=NVIDIA DLSS`/`DLSS model`/`渲染分辨率`/`窗口缩放滤镜`）。**★ 只编 A 版 = 本机 DLSS 菜单全部丢失，这是必须避免的回归。**
+5. **先请用户关闭游戏**，再用 `switch-fork-i18n.py --apply --lang 1 --fork-dll <B 版 NGX DLL>` 装回并体检；真机 F1 → Graphics 页确认四项 DLSS 菜单都在。
+6. 用 **A 版 stub DLL** 打补丁包 → 打 `X.Y.Z-CN` tag + 发布 Release（见下节）。**发版前核对补丁包 DLL SHA ≠ 本机 NGX DLL SHA**，且 NGX SDK/runtime/含 NGX 的 DLL 一个都不进 git、不进资产。
 
 两个前置条件需用户配合：**关游戏**（换 DLL 前）、**一次 gh 登录**（仅建 issue/PR 用；tag/Release 可用 Git 凭据里的 token 走 API，无需 gh）。
+
+> **高工特别约定（2026-11-12）**：「Hookshot 更新到 X.Y.Z 了，请跟进」这条触发词，**默认就要带 DLSS/NGX 重编本机版**——不是可选项。因为 NGX 版受 NVIDIA 许可不能进 git，本机常驻的 DLSS 配置只能靠每次跟进时显式重编 B 版来保住；配套的根 `.gitignore` 已把这些产物拦下，即使落在仓库工作目录也不会被 add/commit/push。
 
 ## 每次跟进要同步发一个 `X.Y.Z-CN` Release
 
@@ -193,7 +253,7 @@ export RX_VK_ONLY=1
 - **资产 = 官方 7 项照搬 + CN 3 项 = 网页共 10 项**（GitHub 自动的 `Source code` zip/tar.gz 2 项 + 上传 8 项）：
   - 官方 7 项照搬原样：`HookshotBuilder.exe`、`Hookshot-vX.Y.Z-Windows-x64.zip`、`hookshot-setup.txt`、`hookshot-linux.txt`、`SHA256SUMS`，及 GitHub 自动生成的 `Source code` zip/tar.gz。
   - CN 差异 3 项：
-    1. **中文 DLL 补丁** `Hookshot-X.Y.Z-CN-DLL-Patch.zip`（`hookshot_vk.dll` + `INSTALL.txt`）。官方 release 本就不含 470 MB 游戏 exe（Builder 在玩家本机从游戏文件构建），能分发的中文载体只有①源码 tag（draw-time i18n）②这个 DLL 补丁；它是「追加中文支持的可执行文件」。
+    1. **中文 DLL 补丁** `Hookshot-X.Y.Z-CN-DLL-Patch.zip`（`hookshot_vk.dll` + `INSTALL.txt`）。官方 release 本就不含 470 MB 游戏 exe（Builder 在玩家本机从游戏文件构建），能分发的中文载体只有①源码 tag（draw-time i18n）②这个 DLL 补丁；它是「追加中文支持的可执行文件」。**★ 包内必须是 A 版 stub DLL（不带 NGX）——发布前用 SHA 核对它 ≠ 本机 B 版 NGX DLL（当前 stub 基线 `ca59d57d…`，NGX `15630585…`）。NVIDIA 许可禁止分发 NGX 二进制，误将 B 版打进包即违规，必须停发重打。**
     2. **预更新面板** `Hookshot-CN-PrepUpdate.zip`（本地下载加速工具，见下节；Windows-only）。
     3. `README-X.Y.Z-CN.md`（完整中文说明，随资产上传）。
   - **不镜像 231 MB 的 Linux AppImage**：它不含中文、且是 Linux 构建器，硬塞进 CN Release 只会误导；在正文给官方直达链接。

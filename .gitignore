@@ -37,3 +37,29 @@ build-linux/
 
 # ---- NVIDIA's DLSS SDK (scripts/ngx_sdk.py): NVIDIA's files, never committed ----
 ngx-sdk/
+
+# ---- Local-only NGX / DLSS build outputs (NVIDIA license: NEVER commit/push/publish) ----
+# Public -CN releases ship the stub DLL only. The NGX-enabled DLL, its runtime and SDK
+# are for this machine only. Tracked NGX *source* below is upstream and must stay tracked:
+#   scripts/ngx_sdk.py, scripts/linux/ngx-sdk.sh, gpu/vk/vk_ngx_msvc_rt.cpp,
+#   tests/test_ngx_sdk.py, tests/test_make_game_ngx.py
+# IMPORTANT: gitignore has NO inline comments - a pattern with trailing "# ..." is taken
+# literally and matches nothing. Keep every pattern below bare; explanations go above.
+# local NGX SDK + runtime root (D:\games\NS2\Hookshot\private-ngx)
+private-ngx/
+# interrupted ngx runtime download (nvngx_dlss.dll.part)
+*.dll.part
+# switch-fork-i18n.py DLL swap backups (hookshot_vk.dll.swap-*)
+*.swap-*
+# older v2.1.0 DLL/ini backups
+*.bak-v210-*
+# manual backups from config/tool changes
+*.bak-before-*
+# game-folder NGX runtime dir if ever copied into the repo
+ngx/
+# NVIDIA NGX runtime binaries (already covered by *.dll, listed explicit)
+nvngx_*.dll
+# detached signatures of local binaries
+*.sig
+# config switch atomic-write temp file
+*.config-switch.tmp
