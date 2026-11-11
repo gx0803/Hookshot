@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """Orchestrate one upstream-sync cycle for the menu-i18n fork.
 
-Design note (learned the hard way): this script and its sibling tools live on
-the chore/upstream-sync branch, whose parent is feat/menu-i18n. Run the sync on
-a worktree whose branch CONTAINS these tools (chore/upstream-sync, or a branch
-cut from it) -- NOT on bare feat/menu-i18n, where these files do not exist on
-disk. To be safe the tool checks tool completeness before touching git, so it
-can never
-repeat the failure of "rebase paused, but the resolver was not on disk".
+Design note (learned the hard way, twice): the resolver tool and its registry
+live in scripts/sync/ on the chore/upstream-sync branch. But a rebase replays
+the i18n commit FIRST, and at that pause the worktree is checked out at a point
+where scripts/sync/ does not exist yet (those files were added by LATER commits
+in the stack). So the resolver path on disk vanishes exactly when it is needed.
+
+Fix: this script reads the resolver + registry into memory at startup (before
+rebase, when all tools are present), and on conflict writes them to a temporary
+directory outside the worktree and runs them from there. Tool availability is
+therefore independent of the transient rebase worktree state.
+
+Run this on a worktree whose branch contains the tools (chore/upstream-sync or
+a branch cut from it) -- NOT on bare feat/menu-i18n, which has no scripts/sync/
+at all. The pre-flight completeness check enforces that.
 
 This is a READ-ONLY coordinator by default. It prints status and the exact next
 commands; it only mutates git state (fetch + rebase + conflict resolution) with
@@ -31,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,14 +57,41 @@ REQUIRED = [
     ROOT / "gpu" / "vk" / "menu_zh.json",
 ]
 
+# Read the conflict resolver + its registry into memory NOW, while every tool is
+# still on disk (before any rebase). During a rebase pause at the i18n commit,
+# scripts/sync/ is not checked out, so these bytes are the only reliable copy.
+_RESOLVER_SRC = (HERE / "resolve-rebase-conflicts.py").read_text(encoding="utf-8") if (HERE / "resolve-rebase-conflicts.py").is_file() else None
+_REGISTRY_SRC = (HERE / "known-conflicts.json").read_text(encoding="utf-8") if (HERE / "known-conflicts.json").is_file() else None
+_TOOL_TMP = None
+
+
+def resolver_dir() -> Path:
+    """Materialise the in-memory resolver + registry outside the worktree."""
+    global _TOOL_TMP
+    if _TOOL_TMP is None:
+        if _RESOLVER_SRC is None or _REGISTRY_SRC is None:
+            raise RuntimeError("resolver/registry not loadable at startup")
+        d = Path(tempfile.mkdtemp(prefix="hookshot-sync-"))
+        (d / "resolve-rebase-conflicts.py").write_text(_RESOLVER_SRC, encoding="utf-8", newline="\n")
+        (d / "known-conflicts.json").write_text(_REGISTRY_SRC, encoding="utf-8", newline="\n")
+        _TOOL_TMP = d
+    return _TOOL_TMP
+
+
+VERBOSE = False
+
 
 def run(args, env=None):
     e = dict(os.environ)
     e.setdefault("GIT_EDITOR", "true")
     if env:
         e.update(env)
+    if VERBOSE:
+        print("      $ %s" % " ".join(str(x) for x in args))
     p = subprocess.run(args, cwd=str(ROOT), text=True, encoding="utf-8",
                        errors="replace", capture_output=True, timeout=300, env=e)
+    if VERBOSE:
+        print("        -> rc=%d  err=%s" % (p.returncode, (p.stderr or "").strip().splitlines()[-1] if (p.stderr or "").strip() else ""))
     return p.returncode, (p.stdout or ""), (p.stderr or "")
 
 
@@ -90,7 +125,10 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="fetch + rebase + resolve; stop before build")
     ap.add_argument("--upstream", default=UPSTREAM_REMOTE)
     ap.add_argument("--ref", default=UPSTREAM_REF)
+    ap.add_argument("--verbose", action="store_true", help="print every subprocess command and its return code")
     a = ap.parse_args()
+    global VERBOSE
+    VERBOSE = a.verbose
 
     print("== upstream sync ==")
     print("repo:  %s" % ROOT)
@@ -144,15 +182,16 @@ def main() -> int:
             print("!! rebase paused with no unmerged files; inspect manually and finish by hand", file=sys.stderr)
             return 1
         print("  round %d: conflicts in %s" % (rounds, ", ".join(conflicted)))
+        tool = str(resolver_dir() / "resolve-rebase-conflicts.py")   # in-memory copy, outside the transient worktree
         for f in conflicted:
             p = ROOT / f
-            c1, o1, e1 = run([sys.executable, "-I", "-B", str(HERE / "resolve-rebase-conflicts.py"), str(p), "--check"])
+            c1, o1, e1 = run([sys.executable, "-I", "-B", tool, str(p), "--check"])
             print("    check  %-24s rc=%d %s" % (f, c1, (o1 + e1).strip().splitlines()[-1] if (o1 + e1).strip() else ""))
             if c1 != 0:
-                print("!! %s is NOT safely auto-resolvable; aborting. Register it first (see known-conflicts.json).", file=sys.stderr)
+                print("!! %s is NOT safely auto-resolvable; aborting. Register it first (see known-conflicts.json)." % f, file=sys.stderr)
                 abort()
                 return 1
-            c2, o2, e2 = run([sys.executable, "-I", "-B", str(HERE / "resolve-rebase-conflicts.py"), str(p)])
+            c2, o2, e2 = run([sys.executable, "-I", "-B", tool, str(p)])
             print("    apply  %-24s rc=%d" % (f, c2))
             if c2 != 0 or has_markers(p):
                 print("!! resolve failed or markers remain in %s; aborting (nothing committed).", file=sys.stderr)
