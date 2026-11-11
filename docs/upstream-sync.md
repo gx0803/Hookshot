@@ -8,18 +8,23 @@
 
 | 分支 | 用途 | 是否提 PR |
 |---|---|---|
-| `feat/menu-i18n` | 唯一承载 i18n 功能改动（建自 `v2.1.0` tag，单个提交） | 是：给上游提 PR |
-| `chore/upstream-sync` | 本目录的同步工具与本文档，脱离功能分支独立维护 | 否 |
+| `feat/menu-i18n` | 唯一承载 i18n 功能改动（建自 `v2.1.0` tag，单个提交），**保持不动**作为纯净 PR 来源 | 是：给上游提 PR |
+| `chore/upstream-sync` | `feat/menu-i18n` + 本目录同步工具与本文档。**日常同步在这个分支做**（工具就在同一工作树磁盘上） | 否 |
 | `main` | fork 的 upstream 镜像，不直接改 | 否 |
 
-`feat/menu-i18n` 保持功能单一，避免把维护脚本混进给上游的 PR（上游 CONTRIBUTING 要求一 PR 一主题）。同步工作在 `feat/menu-i18n` 上做，产出 DLL 供本地使用。
+**为什么同步在 `chore/upstream-sync` 上做**：它的父提交就是 `feat/menu-i18n`，既含全部 i18n 代码、又含同步工具。`sync-upstream.py` 动手前会检查「工具是否在当前工作树磁盘上」——若在裸 `feat/menu-i18n` 上跑，那里没有 `scripts/sync/`，脚本直接拒绝。这样可避免 rebase 冲突暂停时发现解决器不在、却误把带冲突标记的文件 `git add` 提交上去（**这是真实踩过并已修的坑**）。
+
+**提 PR 时**：`chore/upstream-sync` rebase 到目标上游后，只把那个 `feat(menu):` 提交 cherry-pick 到一个从 `main` 新切的 PR 分支，工具与本文档天然不进 PR（上游 CONTRIBUTING 要求一 PR 一主题）。`feat/menu-i18n` 始终停在原始功能提交，是这条 cherry-pick 的稳定来源。
+
+**冲突铁律**：任何冲突必须经 `resolve-rebase-conflicts.py --check` 逐字节确认是「已登记的纯插入」、且解决后文件**零冲突标记**，才允许 `git add && git rebase --continue`。遇到未登记冲突，编排器自动 `git rebase --abort` 回到同步前状态，绝不半途提交带标记的文件。手工操作时同样遵守，并**逐条命令看退出码，不要用管道把失败吞掉**。
 
 ## 核心回路（六步）
 
 ```
 ①  fetch upstream main
-②  rebase feat/menu-i18n（i18n 提交整块挪到新 main 之上）
+②  在 chore/upstream-sync 分支 rebase（i18n 提交整块挪到新 main 之上）
        └ 冲突只可能是「上游在我们挂钩处插入了新代码」→ 用登记好的脚本保留两侧
+       └ 未登记冲突 / 解决后有标记 → 自动 abort，回到同步前状态
 ③  audit-menu-drift.py：列出上游新增、中文表缺失的菜单串
 ④  补译：从游戏官方 zh-Hans 资源取译名，写入 menu_zh.json（唯一人工步骤）
 ⑤  gen_menu_i18n.py 重生成表头 + RX_VK_ONLY=1 重编译 vk 层（约 46 秒）
@@ -49,18 +54,21 @@
 
 ```bash
 cd /d D:\businessProjects\Hookshot\gx0803\Hookshot
+git checkout chore/upstream-sync  # 关键：必须在这个分支（工具才在磁盘上），别在裸 feat 上做
 git status                         # 必须干净，否则先 commit/stash
 git fetch --no-tags https://github.com/NotRexed/Hookshot.git main:refs/remotes/upstream/main
 git log --oneline HEAD..refs/remotes/upstream/main | wc -l   # 上游领先多少提交
 git rebase refs/remotes/upstream/main
 ```
 
-或用编排器（默认只读报告，加 `--apply` 才真正 fetch+rebase，且停在编译前）：
+**强烈建议用编排器**（默认只读报告，加 `--apply` 才真正 fetch+rebase）。它会在动手前检查工具是否齐全、工作树是否干净，rebase 冲突时**逐条严格判退出码**、已登记冲突自动保留两侧、未登记冲突自动 abort，并在进入 build 前停下：
 
 ```bash
-%PY% -I -B scripts/sync/sync-upstream.py --check     # 只体检
+%PY% -I -B scripts/sync/sync-upstream.py --check     # 只体检，零改动
 %PY% -I -B scripts/sync/sync-upstream.py --apply     # fetch + rebase + 冲突检测，停在编译前
 ```
+
+> 手工执行 `resolve-rebase-conflicts.py` 时，**不要用 `| sed`/`| head` 包裹后再靠 `$?` 判成败**（管道会吞掉真实退出码，曾因此把带冲突标记的文件误提交）。直接运行并看它自己打印的 `OK`/`ABORTED`，或在 shell 里 `set -o pipefail`。`--check` 通过、`--apply` 后 `grep -c '<<<<<<<' gpu/vk/vk_menu.cpp` 必须为 `0`，才 `git add && git rebase --continue`。
 
 ### ② b. 若有冲突
 
@@ -138,7 +146,7 @@ export RX_VK_ONLY=1
 
 官方 `HookshotBuilder.exe` 的 Update 会**成套覆盖 `hookshot.exe` + `hookshot_vk.dll`**，fork 的 Language tab 与源码中文会丢。恢复流程：
 
-1. 确认新版本对应的上游 tag/commit，把 `feat/menu-i18n` rebase 到它（走上面六步）。
+1. 确认新版本对应的上游 tag/commit，把 `chore/upstream-sync` rebase 到它（走上面六步）。
 2. 用新版本工具链重编 vk 层（工具链路径里的 `v2.1.0` 换成新版本目录）。
 3. `switch-fork-i18n.py --fork-dll <新DLL>` 重铺，体检 SHA / 字体回退串 / 新译文串。
 4. 真机进游戏确认。
@@ -150,7 +158,7 @@ export RX_VK_ONLY=1
 若上游接受 i18n（issue #2303 → PR），中文进入官方源码，Builder 下载的 DLL 自带中文，上表「恢复中文」整段都不需要——**这才是彻底零操作的唯一路径**。因此：
 
 - **短期**：本 SOP + 工具保底，fork 自维护。
-- **并行**：盯 issue #2303；作者一旦松口，把 `feat/menu-i18n` 按 CONTRIBUTING 要求（从 `main` 切、英文、 Conventional Commit、附中英截图、CI 通过、AI 辅助署名）整理成 PR 提上去。
+- **并行**：盯 issue #2303；作者一旦松口，从 `chore/upstream-sync` 把 `feat(menu):` 那个提交 cherry-pick 到从 `main` 新切的 PR 分支（工具与 SOP 不进 PR），按 CONTRIBUTING 要求（英文、Conventional Commit、附中英截图、CI 通过、AI 辅助署名）提上去。`feat/menu-i18n` 不参与 rebase，始终保持这个可分发的干净提交。
 
 ## 回滚
 

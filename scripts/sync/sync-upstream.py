@@ -1,23 +1,34 @@
 #!/usr/bin/env python3
 """Orchestrate one upstream-sync cycle for the menu-i18n fork.
 
-This is a READ-ONLY coordinator by default. It runs the safe checks and prints
-the exact next commands; it never mutates git state or compiles anything unless
-you pass --apply, and even then it only does the git rebase + conflict resolution
-(it stops before building, because the build needs machine-specific toolchain
-paths documented in docs/upstream-sync.md).
+Design note (learned the hard way): this script and its sibling tools live on
+the chore/upstream-sync branch, whose parent is feat/menu-i18n. Run the sync on
+a worktree whose branch CONTAINS these tools (chore/upstream-sync, or a branch
+cut from it) -- NOT on bare feat/menu-i18n, where these files do not exist on
+disk. To be safe the tool checks tool completeness before touching git, so it
+can never
+repeat the failure of "rebase paused, but the resolver was not on disk".
 
-    python -I -B scripts/sync/sync-upstream.py --check          # report only (default)
-    python -I -B scripts/sync/sync-upstream.py --apply          # fetch + rebase + resolve; stop before build
+This is a READ-ONLY coordinator by default. It prints status and the exact next
+commands; it only mutates git state (fetch + rebase + conflict resolution) with
+--apply, and even then stops before building, because the build needs
+machine-specific toolchain paths documented in docs/upstream-sync.md.
 
-The i18n delta lives in ONE commit on feat/menu-i18n (on top of v2.1.0). We
-rebase that commit onto the newest upstream/main: most files auto-merge, and the
-few known pure-insertion conflicts are resolved by resolve-rebase-conflicts.py
-against known-conflicts.json. Upstream's NEW menu strings are then found by
-audit-menu-drift.py and must be translated from the game's official zh-Hans data
-by a human before rebuilding.
+Safety rules enforced here:
+  * every subprocess return code is checked (no shell pipes that could swallow
+    a failure);
+  * a conflict is auto-resolved ONLY if resolve-rebase-conflicts.py --check
+    accepts it byte-exactly;
+  * after resolving, the file must have ZERO conflict markers before git add;
+  * any unknown conflict aborts the whole rebase (git rebase --abort), leaving
+    the branch exactly as it was.
+
+    python -I -B scripts/sync/sync-upstream.py --check
+    python -I -B scripts/sync/sync-upstream.py --apply
 """
 import argparse
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -26,27 +37,73 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 UPSTREAM_REMOTE = "https://github.com/NotRexed/Hookshot.git"
 UPSTREAM_REF = "refs/remotes/upstream/main"
-I18N_BRANCH = "feat/menu-i18n"
+WORK_BRANCH = "chore/upstream-sync"
+REQUIRED = [
+    HERE / "resolve-rebase-conflicts.py",
+    HERE / "audit-menu-drift.py",
+    HERE / "known-conflicts.json",
+    HERE / "drift-whitelist.json",
+    ROOT / "scripts" / "gen_menu_i18n.py",
+    ROOT / "tests" / "test_menu_i18n.py",
+    ROOT / "gpu" / "vk" / "menu_i18n.h",
+    ROOT / "gpu" / "vk" / "menu_zh.json",
+]
 
 
-def run(args, capture=True):
+def run(args, env=None):
+    e = dict(os.environ)
+    e.setdefault("GIT_EDITOR", "true")
+    if env:
+        e.update(env)
     p = subprocess.run(args, cwd=str(ROOT), text=True, encoding="utf-8",
-                       errors="replace", capture_output=capture, timeout=300)
+                       errors="replace", capture_output=True, timeout=300, env=e)
     return p.returncode, (p.stdout or ""), (p.stderr or "")
+
+
+def has_markers(path: Path) -> bool:
+    t = path.read_text(encoding="utf-8")
+    return any(l.startswith("<<<<<<< ") or l.startswith(">>>>>>> ") or l == "=======\n"
+               for l in t.splitlines(keepends=True))
+
+
+def rebase_in_progress() -> bool:
+    for name in ("rebase-merge", "rebase-apply"):
+        rc, out, _ = run(["git", "rev-parse", "--git-path", name])
+        if rc == 0 and Path(str(ROOT / out.strip())).exists():
+            return True
+    return False
+
+
+def unmerged() -> list:
+    rc, out, _ = run(["git", "diff", "--name-only", "--diff-filter=U"])
+    return [x for x in out.strip().splitlines() if x]
+
+
+def abort():
+    run(["git", "rebase", "--abort"])
+    print("!! rebase aborted; branch restored to its pre-sync state.", file=sys.stderr)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--check", action="store_true", help="read-only report (the default; no git state changed)")
-    ap.add_argument("--apply", action="store_true", help="perform fetch + rebase + conflict resolution")
+    ap.add_argument("--check", action="store_true", help="read-only report (the default)")
+    ap.add_argument("--apply", action="store_true", help="fetch + rebase + resolve; stop before build")
     ap.add_argument("--upstream", default=UPSTREAM_REMOTE)
     ap.add_argument("--ref", default=UPSTREAM_REF)
     a = ap.parse_args()
 
-    print("== upstream sync check ==")
-    print("repo:     %s" % ROOT)
-    print("i18n br:  %s" % I18N_BRANCH)
-    print("upstream: %s" % a.upstream)
+    print("== upstream sync ==")
+    print("repo:  %s" % ROOT)
+    rc, branch, _ = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    print("branch: %s  (expected work branch: %s)" % (branch.strip(), WORK_BRANCH))
+
+    missing = [str(p) for p in REQUIRED if not p.is_file()]
+    if missing:
+        print("!! sync tools are NOT on this worktree's disk (this branch may not contain "
+              "the chore commit). Missing:\n   " + "\n   ".join(missing), file=sys.stderr)
+        print("   Fix: run the sync on a worktree whose branch is %s or is cut from it." % WORK_BRANCH, file=sys.stderr)
+        return 1
+    print("OK  all sync tools present on disk")
 
     rc, out, _ = run(["git", "status", "--porcelain"])
     if out.strip():
@@ -54,61 +111,87 @@ def main() -> int:
         return 1
     print("OK  working tree clean")
 
-    rc, branch, _ = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-    if branch.strip() != I18N_BRANCH:
-        print("!! on branch '%s'; switch to %s first" % (branch.strip(), I18N_BRANCH), file=sys.stderr)
-        return 1
-    print("OK  on %s" % I18N_BRANCH)
+    rc, out, _ = run(["git", "rev-list", "--count", "HEAD.." + a.ref]) if (run(["git", "rev-parse", "--verify", a.ref])[0] == 0) else (0, "0", "")
+    print("upstream ref: %s  | commits ahead: %s" % (a.ref, out.strip()))
 
     if not a.apply:
-        print("\n--check mode: no git state changed.")
-        print("Next steps (see docs/upstream-sync.md):")
-        print("  1) python -I -B scripts/gen_menu_i18n.py --check")
-        print("  2) python -I -B tests/test_menu_i18n.py")
-        print("  3) python -I -B scripts/sync/sync-upstream.py --apply")
+        print("\n--check mode: no git state changed. Next:")
+        print("  python -I -B scripts/gen_menu_i18n.py --check")
+        print("  python -I -B tests/test_menu_i18n.py")
+        print("  python -I -B scripts/sync/sync-upstream.py --apply")
         return 0
 
-    print("\n== fetching upstream ==")
-    rc, out, err = run(["git", "fetch", "--no-tags", a.upstream, "main:" + a.ref])
+    print("\n[1] fetch upstream")
+    rc, out, err = run(["git", "fetch", "--no-tags", a.upstream, "+main:" + a.ref])
     print((out + err).strip())
     if rc != 0:
         print("!! git fetch failed", file=sys.stderr)
         return rc
-
     rc, head, _ = run(["git", "rev-parse", "--short", a.ref])
-    print("upstream/main now at %s" % head.strip())
+    print("upstream/main = %s" % head.strip())
 
-    print("\n== rebasing %s onto upstream/main ==" % I18N_BRANCH)
+    print("\n[2] rebase onto upstream/main (loop, strict checks)")
     rc, out, err = run(["git", "rebase", a.ref])
     print((out + err).strip())
-    if rc != 0:
-        conflicted = run(["git", "diff", "--name-only", "--diff-filter=U"])[1].strip().splitlines()
-        print("\nrebase paused on conflicts: %s" % ", ".join(conflicted))
+    rounds = 0
+    while rc != 0 and rounds < 50:
+        rounds += 1
+        if not rebase_in_progress():
+            print("!! rebase failed with no conflict state; inspect manually", file=sys.stderr)
+            return 1
+        conflicted = unmerged()
+        if not conflicted:
+            print("!! rebase paused with no unmerged files; inspect manually and finish by hand", file=sys.stderr)
+            return 1
+        print("  round %d: conflicts in %s" % (rounds, ", ".join(conflicted)))
         for f in conflicted:
-            r2 = run([sys.executable, "-I", "-B", str(HERE / "resolve-rebase-conflicts.py"), str(ROOT / f), "--check"])
-            if r2[0] != 0:
-                print("!! conflict in %s is NOT safely auto-resolvable; resolve manually." % f, file=sys.stderr)
-                print("   (run resolve-rebase-conflicts.py <file> --dump, register it, then rerun --check)", file=sys.stderr)
+            p = ROOT / f
+            c1, o1, e1 = run([sys.executable, "-I", "-B", str(HERE / "resolve-rebase-conflicts.py"), str(p), "--check"])
+            print("    check  %-24s rc=%d %s" % (f, c1, (o1 + e1).strip().splitlines()[-1] if (o1 + e1).strip() else ""))
+            if c1 != 0:
+                print("!! %s is NOT safely auto-resolvable; aborting. Register it first (see known-conflicts.json).", file=sys.stderr)
+                abort()
                 return 1
-        print("\nAll conflicts are registered. Apply resolution:")
-        for f in conflicted:
-            print("  python -I -B scripts/sync/resolve-rebase-conflicts.py %s" % f)
-        print("  git add <files> && git rebase --continue")
-        print("\nSTOPPED before build. Resolve above, then follow docs/upstream-sync.md steps 4-6.")
-        return 2
+            c2, o2, e2 = run([sys.executable, "-I", "-B", str(HERE / "resolve-rebase-conflicts.py"), str(p)])
+            print("    apply  %-24s rc=%d" % (f, c2))
+            if c2 != 0 or has_markers(p):
+                print("!! resolve failed or markers remain in %s; aborting (nothing committed).", file=sys.stderr)
+                abort()
+                return 1
+            ca, _, ea = run(["git", "add", f])
+            if ca != 0:
+                print("!! git add failed for %s: %s" % (f, ea.strip()), file=sys.stderr)
+                abort()
+                return 1
+        rc, out, err = run(["git", "rebase", "--continue"])
+        print((out + err).strip())
+    if rc != 0:
+        print("!! rebase did not complete after %d rounds; aborting", file=sys.stderr)
+        abort()
+        return 1
+    if rebase_in_progress():
+        print("!! rebase still in progress; aborting", file=sys.stderr)
+        abort()
+        return 1
+    print("OK  rebase complete, 0 conflict markers")
 
-    print("\nOK  rebase completed with no conflicts.")
-    print("\n== post-rebase checks ==")
-    for script, label in [("scripts/gen_menu_i18n.py", "generator"),
-                          ("tests/test_menu_i18n.py", "i18n tests")]:
-        rc, out, err = run([sys.executable, "-I", "-B", str(ROOT / script), "--check"] if "gen_menu" in script
-                           else [sys.executable, "-I", "-B", str(ROOT / script)])
-        print("[%s] rc=%d %s" % (label, rc, (out + err).strip().splitlines()[-1] if (out + err).strip() else ""))
-    rc, out, err = run([sys.executable, "-I", "-B", str(HERE / "audit-menu-drift.py")])
-    print("[drift]\n" + out.strip())
+    print("\n[3] post-rebase gates")
+    gates = [
+        ("generator", [sys.executable, "-I", "-B", str(ROOT / "scripts" / "gen_menu_i18n.py"), "--check"]),
+        ("i18n-tests", [sys.executable, "-I", "-B", str(ROOT / "tests" / "test_menu_i18n.py")]),
+        ("drift", [sys.executable, "-I", "-B", str(HERE / "audit-menu-drift.py")]),
+    ]
+    for label, cmd in gates:
+        grc, gout, gerr = run(cmd)
+        tail = (gout + gerr).strip().splitlines()[-1] if (gout + gerr).strip() else ""
+        print("  [%-10s] rc=%d  %s" % (label, grc, tail))
+        if label != "drift" and grc != 0:
+            print("  !! %s failed -- fix before building (drift is expected on new main and is not a gate)." % label, file=sys.stderr)
 
-    print("\nSTOPPED before build. Next (docs/upstream-sync.md step 5): translate any drift into")
-    print("gpu/vk/menu_zh.json, run gen_menu_i18n.py, then RX_VK_ONLY=1 rebuild, then switch-fork-i18n.py to install.")
+    print("\nSTOPPED before build. Next (docs/upstream-sync.md steps 4-6):")
+    print("  4) translate drift (if any) into gpu/vk/menu_zh.json, then gen_menu_i18n.py")
+    print("  5) RX_VK_ONLY=1 rebuild -> build-fork-i18n3/sa/build/hookshot_vk.dll")
+    print("  6) switch-fork-i18n.py --apply --lang 1 --fork-dll <that dll>")
     return 0
 
 
