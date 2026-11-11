@@ -120,13 +120,21 @@ struct Reader {
         return dict != nullptr;
     }
     /// A font by name ("ClarimoUDPE-Regular"); empty when the files do not have it, or it has no Latin letters
+    /// (hookshot) Tries the .bfotf (OpenType/CFF) first as before, then the .bfttf (TrueType) of the same name:
+    /// the game ships its Chinese/Japanese/Korean faces as .bfttf, in the same container (8-byte header + XOR,
+    /// zstd with this dictionary, an sfnt body). A .bfotf of that name still wins, so nothing existing changes.
     std::vector<unsigned char> read(const char* name) const {
-        std::vector<unsigned char> packed, raw;
-        if (!dict || !read_file(romfs + "Font2/Scalable/" + name + ".Nin_Ounce_NVN2.bfotf.zs", packed) || !unzstd(packed, dict, raw))
-            return {};
-        std::vector<unsigned char> font = bfotf_font(raw);
-        if (!font.empty() && !has_latin(font)) font.clear();
-        return font;
+        if (!dict) return {};
+        static const char* const exts[] = {".Nin_Ounce_NVN2.bfotf.zs", ".Nin_Ounce_NVN2.bfttf.zs"};
+        for (const char* ext : exts) {
+            std::vector<unsigned char> packed, raw;
+            if (read_file(romfs + "Font2/Scalable/" + name + ext, packed) && unzstd(packed, dict, raw)) {
+                std::vector<unsigned char> font = bfotf_font(raw);
+                if (!font.empty() && !has_latin(font)) font.clear();
+                return font;
+            }
+        }
+        return {};
     }
 };
 

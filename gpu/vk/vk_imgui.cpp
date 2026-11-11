@@ -77,9 +77,17 @@ void load_fonts() {
     ImFont* strong = nullptr;
     ImFont* heading = nullptr;
     if (!(off && *off == '0')) {
-        body = game_font("ClarimoUDPE-Regular");
-        strong = body ? game_font("ClarimoUDPE-DemiBold") : nullptr;
-        heading = strong ? game_font("CetraDisplayPro-Medium") : nullptr;
+        // (hookshot) Read a CJK-capable face from the game's own files first (vk_game_font.h falls back to .bfttf),
+        // so the menu can draw a translated language. These faces carry Latin too, so English still renders. If the
+        // game's files do not have them, fall back to its original Latin trio. romfs is never written to.
+        body = game_font("FZYASHJW_Zhun");
+        strong = body ? game_font("FZYASHJW_Cu") : nullptr;
+        heading = strong;
+        if (!body) {
+            body = game_font("ClarimoUDPE-Regular");
+            strong = body ? game_font("ClarimoUDPE-DemiBold") : nullptr;
+            heading = strong ? game_font("CetraDisplayPro-Medium") : nullptr;
+        }
     }
     if (body && strong && heading) {
         logf("vk: ui: the game's own menu font, from its files");
