@@ -1,0 +1,29 @@
+{
+ "_note": "Strings intentionally NOT translated. audit-menu-drift.py skips these when reporting new English menu strings after an upstream rebase. Keep this list SHORT: add a string only when you have decided it must stay English (brand/protocol names, raw numbers, key tokens). Adding a real UI word here hides drift -- prefer translating it into gpu/vk/menu_zh.json instead.",
+ "exact": [
+  "HDR", "DLSS", "Reflex", "Anti-Lag 2", "NVIDIA Reflex", "AMD Anti-Lag 2",
+  "FSR", "FSR 3.1", "AMD FSR 3.1", "AMD FSR 4", "AMD FSR 4 Native AA",
+  "DLAA", "NVIDIA DLAA", "NVIDIA DLSS", "V-Sync", "VSync",
+  "Discord", "NVIDIA", "AMD", "Intel", "Xbox", "Xbox / PC", "Steam Deck",
+  "PlayStation 4", "PlayStation 5", "Switch", "Catmull-Rom", "Lanczos",
+  "Nintendo (Def)", "NVIDIA default", "Game's", "Original",
+  "English", "\u7b80\u4f53\u4e2d\u6587",
+  "UP", "DOWN", "LEFT", "RIGHT", "ENTER", "ESC", "INS", "F1", "F11",
+  "TABL", "TABR", "PADW", "PADS", "PADE", "PADN",
+  "Preset %c (RX_VK_DLSS_PRESET)",
+  " (game's)", " (native)", " (not connected)", "(native)",
+  "16:9", "48:9", "Default (24%)", "FSR 4"
+ ],
+ "prefix": [
+  "NVIDIA's",
+  "The second-generation transformer"
+ ],
+ "numeric_only": true,
+ "printf_format_strings": true,
+ "_fields": {
+  "exact": "skipped verbatim",
+  "prefix": "skipped if the string starts with any of these",
+  "numeric_only": "skip pure numbers / percentages / frame rates / nits / GB / x-multipliers",
+  "printf_format_strings": "skip strings containing a printf conversion (%d %s %f %% etc.) -- these are format templates, handled by the format-string entries in menu_zh.json, not standalone labels"
+ }
+}

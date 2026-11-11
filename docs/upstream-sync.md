@@ -1,0 +1,159 @@
+# 上游长期同步与中文常驻 SOP
+
+本仓库是 `NotRexed/Hookshot` 的 fork。中文以**源码级 draw-time 翻译**实现：英文原文一字不动（它们同时是 ini 键和 `strcmp` 比较主语），只在绘制调用点包 `menu_i18n::tr()`。因此中文是**编译进 DLL 的**，不是事后打补丁——这是本方案相对旧「二进制 `.cntext` 汉化」的本质区别，后者每次升级都要重算 PE 偏移、重定向数百个引用点，易错且脆弱。
+
+本文目标：上游每发一版，按固定流程把新代码同步进来、保住中文、产出可直接使用的 DLL，且**不依赖对话上下文**即可复现。
+
+## 分支结构（谁负责什么）
+
+| 分支 | 用途 | 是否提 PR |
+|---|---|---|
+| `feat/menu-i18n` | 唯一承载 i18n 功能改动（建自 `v2.1.0` tag，单个提交） | 是：给上游提 PR |
+| `chore/upstream-sync` | 本目录的同步工具与本文档，脱离功能分支独立维护 | 否 |
+| `main` | fork 的 upstream 镜像，不直接改 | 否 |
+
+`feat/menu-i18n` 保持功能单一，避免把维护脚本混进给上游的 PR（上游 CONTRIBUTING 要求一 PR 一主题）。同步工作在 `feat/menu-i18n` 上做，产出 DLL 供本地使用。
+
+## 核心回路（六步）
+
+```
+①  fetch upstream main
+②  rebase feat/menu-i18n（i18n 提交整块挪到新 main 之上）
+       └ 冲突只可能是「上游在我们挂钩处插入了新代码」→ 用登记好的脚本保留两侧
+③  audit-menu-drift.py：列出上游新增、中文表缺失的菜单串
+④  补译：从游戏官方 zh-Hans 资源取译名，写入 menu_zh.json（唯一人工步骤）
+⑤  gen_menu_i18n.py 重生成表头 + RX_VK_ONLY=1 重编译 vk 层（约 46 秒）
+⑥  switch-fork-i18n.py 把新 DLL 装回游戏目录 + 校验
+```
+
+除第 ④ 步外全部可自动化/脚本化。第 ④ 步是唯一需要人的地方，且只在**上游改了菜单文案**时才会产生新串——多数升级这一步是空的。
+
+## 绝对路径与工具链（本机）
+
+| 角色 | 路径 |
+|---|---|
+| fork 仓库 | `D:\businessProjects\Hookshot\gx0803\Hookshot` |
+| 上游 remote | `https://github.com/NotRexed/Hookshot.git`（本地 ref `refs/remotes/upstream/main`） |
+| Builder 工具链数据 | `D:\games\NS2\HookshotBuilder-data\versions\v2.1.0\HookshotBuilder\tools\` |
+| 编译工作目录 | `D:\games\NS2\Hookshot\build-fork-i18n3` |
+| 游戏目录 | `D:\games\NS2\Hookshot\games\The Legend of Zelda Ocarina of Time\` |
+| 官方简中译名来源 | `D:\games\NS2\Hookshot\menu-cn\translations.json`（romfs `CNzh` MSBT 提取，440 条） |
+| 游戏 DLL 安装/体检工具 | `D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py` |
+
+## 逐步命令
+
+所有命令在 fork 仓库根目录执行，Python 用 Builder 自带解释器：
+`PY="D:\games\NS2\HookshotBuilder-data\versions\v2.1.0\HookshotBuilder\tools\python\python.exe"`
+
+### ① + ② 同步代码
+
+```bash
+cd /d D:\businessProjects\Hookshot\gx0803\Hookshot
+git status                         # 必须干净，否则先 commit/stash
+git fetch --no-tags https://github.com/NotRexed/Hookshot.git main:refs/remotes/upstream/main
+git log --oneline HEAD..refs/remotes/upstream/main | wc -l   # 上游领先多少提交
+git rebase refs/remotes/upstream/main
+```
+
+或用编排器（默认只读报告，加 `--apply` 才真正 fetch+rebase，且停在编译前）：
+
+```bash
+%PY% -I -B scripts/sync/sync-upstream.py --check     # 只体检
+%PY% -I -B scripts/sync/sync-upstream.py --apply     # fetch + rebase + 冲突检测，停在编译前
+```
+
+### ② b. 若有冲突
+
+`vk_menu.h`、`menu_i18n.h`、`menu_zh.json`、`vk_game_font.h`、`vk_imgui.cpp` 历次 rebase 均自动合并（上游基本不动这些）。冲突几乎只在 `vk_menu.cpp`，且是**纯插入**（上游在我们挂钩的同一位置插了新函数/新初始化）。
+
+```bash
+git diff --name-only --diff-filter=U                  # 列出冲突文件
+%PY% -I -B scripts/sync/resolve-rebase-conflicts.py --dump gpu/vk/vk_menu.cpp
+                                                       # 看两侧原文（JSON 转义）
+%PY% -I -B scripts/sync/resolve-rebase-conflicts.py --check gpu/vk/vk_menu.cpp
+                                                       # 是否都已登记且逐字节匹配
+%PY% -I -B scripts/sync/resolve-rebase-conflicts.py gpu/vk/vk_menu.cpp
+                                                       # 应用：两侧都保留，写回 LF
+git add gpu/vk/vk_menu.cpp && git rebase --continue
+```
+
+**新冲突怎么处理**：脚本对任何未登记或内容变了的冲突一律中止、绝不写文件。确认它确实是「两处独立插入」后，把 `--dump` 打出的两侧原文追加进 `scripts/sync/known-conflicts.json` 的 `conflicts` 数组（中文用 `\uXXXX`），再跑一遍即可。若是「同一行的两种修改」，**必须人工判断取舍，不要塞进登记表**。
+
+### ③ 漂移检测（每次必做）
+
+```bash
+%PY% -I -B scripts/sync/audit-menu-drift.py            # 人类可读报告
+%PY% -I -B scripts/sync/audit-menu-drift.py --check    # 有未翻译新串就 exit 1（CI 门禁）
+```
+
+脚本抽取 `rows[]` 行名/help（含 C++ 相邻字面量拼接）与 `tx_*` 档位值，与 `menu_zh.json` 求差集；数字、按键 token、品牌名、printf 格式串由 `scripts/sync/drift-whitelist.json` 过滤。**它只报告，绝不机翻。**
+
+### ④ 补译（唯一人工步骤，来源纪律）
+
+- **译名只能来自游戏自带的官方简中资源**：`D:\games\NS2\Hookshot\menu-cn\translations.json`（romfs `CNzh.Product.110.sarc.zs` 与 `USen` 按 MSBT file+label 对齐提取），以及新版本 romfs 里对应的 `CNzh`。
+- **不机翻、不凭空猜**。游戏里没有对应词的（如 Hookshot 自造的 UI 术语），保留英文或由人显式定名，并在表格备注。
+- 品牌/协议名（HDR / DLSS / V-Sync / NVIDIA / Discord…）、纯数字档位、按键 token 一律不翻，放白名单。
+- 写入 `gpu/vk/menu_zh.json` 的 `entries` 数组；ASCII 键、UTF-8 中文、值非空、无 identity（en==zh）、printf 占位符 en/zh 数量顺序一致（防 `snprintf` 读错 varargs）。
+- 若上游改写了已有 help（不是新增），`--check` 会以旧 key 命中而漏报，需人工对照 `git diff` 检查变动过的 help 串。
+
+### ⑤ 重生成表头 + 重编译
+
+```bash
+%PY% -I -B scripts/gen_menu_i18n.py --check           # 确认表头与表一致；改过表则先不带 --check 重生成
+%PY% -I -B scripts/gen_menu_i18n.py
+%PY% -I -B tests/test_menu_i18n.py                    # 6 项全绿
+```
+
+只重编 vk 层（约 46 秒，不碰 470 MB 的 `hookshot.exe`）：
+
+```bash
+export EMSDK="D:/games/NS2/HookshotBuilder-data/versions/v2.1.0/HookshotBuilder/tools/emsdk"
+export HOOKSHOT_MINGW="D:/games/NS2/HookshotBuilder-data/versions/v2.1.0/HookshotBuilder/tools/llvm-mingw"
+export RX_CPM="D:/games/NS2/HookshotBuilder-data/versions/v2.1.0/HookshotBuilder/tools/cpm"
+export OOT_WORK="D:/games/NS2/Hookshot/build-fork-i18n3"
+export RX_VK_ONLY=1
+%PY% -I nx2/build.py --standalone --jobs 10
+# 产物：build-fork-i18n3/sa/build/hookshot_vk.dll
+```
+
+> 三个 `export` 缺一不可：缺 `RX_CPM` 找不到 Vulkan/SPIR-V/VMA 头会直接退出；缺 `EMSDK`/`HOOKSHOT_MINGW` 用错编译器报头文件找不到。`RX_VK_ONLY=1` 把 jobs 换成 vk_jobs，跳过 guest 代码（否则全量要几小时）。`--standalone` 会顺带重链 exe，但**只取 DLL，绝不覆盖 `bin\hookshot.exe`**。
+
+### ⑥ 装回并校验（碰游戏目录，改前先确认游戏已关）
+
+```bash
+%PY% D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py --check
+%PY% D:\games\NS2\Hookshot\v2.1-review\switch-fork-i18n.py --apply --lang 1 --fork-dll "D:\games\NS2\Hookshot\build-fork-i18n3\sa\build\hookshot_vk.dll"
+```
+
+工具会：核对游戏进程未运行 → 备份当前 DLL/ini/env → 装新 fork DLL → 写**等价英文键 ini**（fork 的 `ini_key()` 只认英文行名）→ 逐 SHA 校验。当前本地常驻态：`hookshot_vk.dll` = `d2c7f248…`（stage2）、96 个纯英文键 ini、`language=1`（中文启动）、env 三项原样（`HOS_ASPECT=2.3889` / `HOS_OOT_CHEATS=1` / `HOS_INPUT_LIVE=cheat-live.txt`）。
+
+## 关键不变量（改代码时别破坏）
+
+1. **英文原文是逻辑键**：`ini_key()`、`is_motion_row()`、`cheat_value()=="On"` 等比较的是运行时英文串，绝不能让翻译污染它们。draw-time `tr()` 保证这一点，所以旧二进制汉化那套「开关高亮恒停关」的回归**结构上不可能重现**。
+2. **romfs 字体一个字节都不动**：把 CFF/TrueType 字体塞进 `.bfotf` 会让 guest 字体库崩溃（`hookshot.exe+0x83a055c`，已多次实证）。正解是 host 侧回退到游戏自带的 `.bfttf`：`vk_game_font.h` 依次试 `.bfotf.zs`→`.bfttf.zs`，`vk_imgui.cpp` 用 `FZYASHJW_Zhun`/`FZYASHJW_Cu`（含 Latin，英文照显）。上游这两文件历次 0 改动，冲突风险极低。
+3. **宽度缓存按语言失效**：`name_w`/`card_w` 缓存除 scale 外还要带 `menu_i18n::language` 维度，否则中英切换后字形宽度变会裁字（中文「共 4 页」比英文「Page 1 of 5」窄，同屏多塞项）。
+4. **printf 格式串成对翻译**：`Quantity %d`→`数量 %d` 等，`%d` 数量顺序必须一致。
+
+## Builder 升级后如何恢复中文（每次 Update 必做）
+
+官方 `HookshotBuilder.exe` 的 Update 会**成套覆盖 `hookshot.exe` + `hookshot_vk.dll`**，fork 的 Language tab 与源码中文会丢。恢复流程：
+
+1. 确认新版本对应的上游 tag/commit，把 `feat/menu-i18n` rebase 到它（走上面六步）。
+2. 用新版本工具链重编 vk 层（工具链路径里的 `v2.1.0` 换成新版本目录）。
+3. `switch-fork-i18n.py --fork-dll <新DLL>` 重铺，体检 SHA / 字体回退串 / 新译文串。
+4. 真机进游戏确认。
+
+> 这一步「把中文 DLL 换回去」是当前路线**唯一无法消除的机械动作**，因为 Builder 是官方 closed box、构建用的是官方源码，不会用本 fork。它已从旧方案的「重算偏移打补丁」降级为「换一个已编好的文件」，可脚本化、可代劳。
+
+## 何时能真正零追加操作
+
+若上游接受 i18n（issue #2303 → PR），中文进入官方源码，Builder 下载的 DLL 自带中文，上表「恢复中文」整段都不需要——**这才是彻底零操作的唯一路径**。因此：
+
+- **短期**：本 SOP + 工具保底，fork 自维护。
+- **并行**：盯 issue #2303；作者一旦松口，把 `feat/menu-i18n` 按 CONTRIBUTING 要求（从 `main` 切、英文、 Conventional Commit、附中英截图、CI 通过、AI 辅助署名）整理成 PR 提上去。
+
+## 回滚
+
+- DLL 异常：用 `switch-fork-i18n.py --restore` 从 `v2.1-review\fork-preview-backup\` 逐 SHA 还原；或游戏目录同目录的 `.swap-<stamp>` / `.bak-v210-*` 备份。
+- rebase 出错：`git rebase --abort` 回到 rebase 前；工具全程对游戏目录只写一次、写前备份。
+- 想彻底切回官方原版：用 `v2.1-review\switch-state.py --state vanilla`（旧二进制路线的体检/切换工具，仅回退时用）。

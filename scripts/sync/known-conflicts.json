@@ -1,0 +1,20 @@
+{
+ "_note": "Registry of KNOWN pure-insertion conflicts between feat/menu-i18n and upstream main. resolve-rebase-conflicts.py refuses to touch any conflict that is not listed here, so a new upstream edit can never be silently dropped. When upstream adds code next to one of our hooks and rebase reports a NEW conflict, inspect it, confirm both sides are independent insertions (not two edits of the same line), then append an entry with the exact text of each side. Keep both sides verbatim, including whitespace and trailing newline. Chinese must be written as \\uXXXX escapes so this file stays pure ASCII.",
+ "_how_to_add": "1) run: resolve-rebase-conflicts.py <conflicted-vk_menu.cpp> --dump  (prints each side as a JSON string); 2) copy those two strings into a new entry's ours/theirs; 3) add a short reason; 4) re-run without --dump. The tool re-checks byte equality on every run.",
+ "conflicts": [
+  {
+   "id": "tx_menu_lang_vs_tx_fps",
+   "file": "gpu/vk/vk_menu.cpp",
+   "reason": "Our Language row value helper and upstream's new FPS-counter level/corner helpers were both inserted right after tx_onoff(#2181). Both are independent additions.",
+   "ours": "// (hookshot) The Language row's value: English by default, \u7b80\u4f53\u4e2d\u6587. Both names are in the table, so the row reads in\n// whichever language is currently shown. The menu language is applied at once, no restart (only the drawn text changes).\nconst char* tx_menu_lang(int v) { return v ? \"\u7b80\u4f53\u4e2d\u6587\" : \"English\"; }\n",
+   "theirs": "const char* tx_fps_level(int v) { return fps_stats::level_name(v); }\nconst char* tx_fps_corner(int v) { return fps_stats::corner_name(v); }   // (the FPS counter row: Off, FPS, Frame time, Graph, Breakdown)\n"
+  },
+  {
+   "id": "menu_lang_init_vs_fps_init",
+   "file": "gpu/vk/vk_menu.cpp",
+   "reason": "Our RX_VK_MENU_LANG env override + menu_i18n::language init and upstream's new fps_cap_started/fps_level_now init were both appended at the end of menu_init(). Both are independent additions.",
+   "ours": "    if (const char* e = getenv(\"RX_VK_MENU_LANG\")) opts.menu_lang = atoi(e) != 0;   // (test/CI override, no ini needed)\n    menu_i18n::language = opts.menu_lang ? 1 : 0;   // (hookshot) the drawn text follows the saved language from the first frame\n",
+   "theirs": "    fps_cap_started = opts.fps_cap;   // (the FPS counter's graph: the cap applies from the start, host/nn_vi.c)\n    fps_level_now.store(fps_stats::level_of(opts.show_fps), std::memory_order_relaxed);\n"
+  }
+ ]
+}
