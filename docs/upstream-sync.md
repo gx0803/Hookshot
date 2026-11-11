@@ -165,3 +165,45 @@ export RX_VK_ONLY=1
 - DLL 异常：用 `switch-fork-i18n.py --restore` 从 `v2.1-review\fork-preview-backup\` 逐 SHA 还原；或游戏目录同目录的 `.swap-<stamp>` / `.bak-v210-*` 备份。
 - rebase 出错：`git rebase --abort` 回到 rebase 前；工具全程对游戏目录只写一次、写前备份。
 - 想彻底切回官方原版：用 `v2.1-review\switch-state.py --state vanilla`（旧二进制路线的体检/切换工具，仅回退时用）。
+
+## 如何约定「跟进上游更新」（触发词）
+
+用户只要说下面任意一种，即视为下发一次完整同步任务，助手直接按本 SOP 执行，不必再逐条确认：
+
+- 「Hookshot 更新到 X.Y.Z 了，请跟进」
+- 「跟进 Hookshot 上游」/「官方出新版本，同步中文」
+
+一次跟进 = 以下整条链（每个写动作前备份、验证）：
+
+1. `git fetch upstream`，确认上游新 tag/commit。
+2. 在 `chore/upstream-sync` 跑 `scripts/sync/sync-upstream.py --apply`（rebase + 已知冲突自动解 + 门禁）。
+3. 跑 `scripts/sync/audit-menu-drift.py`，把新出现的待译串从**官方 zh-Hans 资源**补进 `gpu/vk/menu_zh.json`（不机翻、不猜）。
+4. `scripts/gen_menu_i18n.py` 重生成 `menu_i18n.h`；`RX_VK_ONLY=1` 重编 vk 层得到中文 `hookshot_vk.dll`。
+5. **先请用户关闭游戏**，再用 `switch-fork-i18n.py --apply --lang 1 --fork-dll <新DLL>` 装回并体检。
+6. 打 `X.Y.Z-CN` tag + 发布 Release（见下节），把该版中文 DLL 补丁包换上去。
+
+两个前置条件需用户配合：**关游戏**（换 DLL 前）、**一次 gh 登录**（仅建 issue/PR 用；tag/Release 可用 Git 凭据里的 token 走 API，无需 gh）。
+
+## 每次跟进要同步发一个 `X.Y.Z-CN` Release
+
+若上游原作者仍不纳入多语言（issue #2303 无回应），每合并一个官方版本 X.Y.Z，就在本 fork 发一个同号 `X.Y.Z-CN`：
+
+- **tag**：annotated tag，指向该版中文 i18n 源码所在的 commit（`feat/menu-i18n` 对应提交）。例如 `v2.1.0-CN` → `9e8c389`（上游 `v2.1.0` `8ef8461` + `feat(menu)`）。
+- **Release**：非 draft、非 prerelease、标为 **Latest**；正文给「下载哪个 / 中文菜单用法 / 注意事项」。
+- **资产对齐官方同名 9 项**：官方那 7 个文件照搬原样（`HookshotBuilder.exe`、`Hookshot-v2.1.0-Windows-x64.zip`、`hookshot-setup.txt`、`hookshot-linux.txt`、`SHA256SUMS` 及 GitHub 自动生成的 `Source code` zip/tar.gz），差异项 =
+  - **把游戏 exe 换成中文载体**：官方 release 本就不含 470 MB 游戏 exe（Builder 在玩家本机从游戏文件构建），能分发的中文载体只有 ① 源码 tag（含 draw-time i18n）② 中文 `hookshot_vk.dll` 补丁包。故以 `Hookshot-X.Y.Z-CN-DLL-Patch.zip`（DLL + `INSTALL.txt`）作为「追加中文支持的可执行文件」，并附 `README-X.Y.Z-CN.md`。
+  - **不镜像 231 MB 的 Linux AppImage**：它不含中文、且是 Linux 构建器，硬塞进 CN Release 只会误导；在正文给官方直达链接。
+- **SHA256SUMS** 重算，覆盖本 Release 实际上传的资产（不含自身、不含 GitHub 自动源码归档）。
+- 发布脚本与产物在 `D:\games\NS2\Hookshot\v2.1-review\release-assets\`（`make-patch.py` / `make-release-meta.py` / `gh-release.py`），token 从 Git 凭据运行时读取、不落盘。
+
+## Update 下载加速：为什么不改官方链路，继续用网页工具
+
+`v2.1-review` 那个带 Update 按钮的启动器，下载慢的 ~500 MB 组件来自 `hookshot-setup.txt` 里写死的 `github.com/NotRexed/Hookshot/releases/download/builder-parts/*.zip`（外加 `mstorsjo/llvm-mingw`）。下载 URL 写死在官方源码里，且每个 part 带 GitHub API 的 SHA-256 摘要校验，改任何字节都会校验失败。
+
+改源重编译可行但**不采用**，原因：
+
+1. 要改 `builder/HookshotBuilder/Updater.cs`、`host/hos_update.c`、`builder/setup/setup.c` 等多处写死的 `NotRexed/Hookshot`，并重编译分发 `HookshotBuilder.exe`；
+2. 官方每次改这块代码，本 fork 的 rebase 就得重打补丁，维护成本远超收益；
+3. 更致命：得先有一个长期稳定、真能加速的第三方 GitHub 镜像域名——不可控的外部依赖，不能替用户拍板。
+
+**既定方案**：继续用 `D:\games\NS2\Hookshot\prep-update\`（`start.bat` → `127.0.0.1:8806`）。它读官方清单算出差集，把 `<sha256>.zip` 预下载进官方 `downloads` 目录；`setup.c` 发现文件已存在且 SHA-256 匹配就整段跳过下载（`setup.c:637`），于是 Update 按钮秒过。零改源码、零 rebase 冲突，且 `app`/`dotnet` 等无独立目录的 part 每次仍需重下这点也已写明。若用户日后指定了一个稳定加速域名，再按本节评估是否做代码级改源。
